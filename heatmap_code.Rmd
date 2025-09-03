@@ -1,0 +1,691 @@
+---
+title: "PA"
+output: html_document
+date: "2025-09-03"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, fig.width = 9, fig.height = 5)
+library(dplyr)
+library(ggplot2)
+library(readr)     # for read_csv()
+library(stringr)   # only if we need string helpers
+
+```
+
+
+```{r}
+ib_file   <- "data/IB_table.csv"
+ib_sheet  <- "Graph_Log reduction"   # sheet that contains the IB table
+
+pvc_file  <- "data/PVC_table.csv"
+pvc_sheet <- "Graph_Log reduction"   # sheet that contains the PVC table
+
+```
+
+
+```{r}
+ib_file  <- "../Heatmap_Project/data/IB_table.csv"
+pvc_file <- "../Heatmap_Project/data/PVC_table.csv"
+
+# sanity check
+file.exists(ib_file); file.exists(pvc_file)
+
+```
+
+```{r}
+read_clean_csv <- function(path, surface_label){
+  df <- readr::read_csv(path, show_col_types = FALSE, trim_ws = TRUE)
+
+  # Try to standardize names -> Treatment / Mean / SD
+  # (match on common keywords so your original long header still works)
+  df <- df |>
+    dplyr::rename(
+      Treatment = dplyr::matches("^treat", ignore.case = TRUE),
+      Mean      = dplyr::matches("average|mean", ignore.case = TRUE),
+      SD        = dplyr::matches("^sd|std|stdev|stdv", ignore.case = TRUE)
+    ) |>
+    # keep only the three columns (in case the CSV has extras)
+    dplyr::select(Treatment, Mean, SD) |>
+    # coerce to numeric in case Excel exported weird formatting
+    dplyr::mutate(
+      Surface = surface_label,
+      Mean = suppressWarnings(as.numeric(gsub("[^0-9.\\-]", "", as.character(Mean)))),
+      SD   = suppressWarnings(as.numeric(gsub("[^0-9.\\-]", "", as.character(SD))))
+    ) |>
+    dplyr::filter(!is.na(Mean))
+
+  df
+}
+
+ib  <- read_clean_csv(ib_file,  "IB")
+pvc <- read_clean_csv(pvc_file, "PVC")
+
+# quick peek
+dplyr::glimpse(ib)
+dplyr::glimpse(pvc)
+
+```
+
+
+```{r}
+treat_order <- c("Det+Chlorine","Det+PAA","Det+Water",
+                 "Foam+Chlorine","Foam+PAA","Foam+Water",
+                 "Without Treatment")
+
+dat <- dplyr::bind_rows(ib, pvc) |>
+  dplyr::mutate(
+    Treatment = factor(Treatment, levels = treat_order),
+    Surface   = factor(Surface,   levels = c("IB","PVC")),
+    label     = sprintf("%.2f \u00B1 %.2f", Mean, SD)   # text to print in tiles
+  )
+
+treat_order
+
+```
+```{r}
+p <- ggplot(dat, aes(x = Surface, y = Treatment, fill = Mean)) +
+  geom_tile(color = "white", linewidth = 0.6) +
+  geom_text(aes(label = label), size = 4, fontface = "bold") +
+  scale_fill_gradientn(
+    colours = c("#f3a05b","#f1c15b","#d9e77b","#a6d96a","#66bd63","#1a9850"),
+    limits = c(0, 5), breaks = seq(0, 4.5, by = 0.5),
+    name   = "Mean log reduction"
+  ) +
+  labs(
+    title   = "Inactivation on Soiled Surfaces",
+    subtitle = "Mean (±SD) log reductions by treatment on IB and PVC",
+    x = "Food Contact Surface", y = "Treatment"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(face = "bold"),
+    axis.text.y = element_text(face = "bold"),
+    legend.position = "right",
+    plot.title = element_text(face = "bold")
+  )
+
+p
+
+```
+
+```{r}
+# 1) Choose the new order (detergent first, then foam)
+treat_order2 <- c("Det+Chlorine","Det+PAA","Det+Water",
+                  "Foam+Chlorine","Foam+PAA","Foam+Water")
+
+# 2) Remove "Without Treatment" and apply the order
+dat2 <- dat |>
+  dplyr::filter(Treatment %in% treat_order2) |>
+  dplyr::mutate(
+    Treatment = factor(Treatment, levels = treat_order2),
+    label = sprintf("%.2f \u00B1 %.2f", Mean, SD)
+  )
+
+# 3) Heatmap
+p2 <- ggplot(dat2, aes(x = Surface, y = Treatment, fill = Mean)) +
+  geom_tile(color = "white", linewidth = 0.6) +
+  geom_text(aes(label = label), size = 4, fontface = "bold") +
+  scale_fill_gradientn(
+    colours = c("#f3a05b","#f1c15b","#d9e77b","#a6d96a","#66bd63","#1a9850"),
+    limits = c(0,5), breaks = seq(0,4.5,0.5),
+    name = "Mean log reduction"
+  ) +
+  # put Det+Chlorine at the TOP; remove this line if you prefer it at the bottom
+  scale_y_discrete(limits = rev(treat_order2)) +
+  labs(
+    title   = "Inactivation on Soiled Surfaces",
+    subtitle = "Mean (±SD) log reductions by treatment on IB and PVC",
+    x = "Food Contact Surface", y = "Treatment"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(face = "bold"),
+    axis.text.y = element_text(face = "bold"),
+    legend.position = "right",
+    plot.title = element_text(face = "bold")
+  )
+
+p2
+
+```
+```{r}
+read_surface <- function(path, surface_label) {
+  df <- readr::read_csv(path, show_col_types = FALSE)
+
+  nm  <- tolower(names(df))
+  if (!"treatment" %in% nm) names(df)[1] <- "Treatment" else
+    names(df)[match("treatment", nm)] <- "Treatment"
+
+  mean_idx <- which(stringr::str_detect(nm, "mean|average"))
+  sd_idx   <- which(stringr::str_detect(nm, "^sd$|std|stdev|st\\.dev|st\\s*dev"))
+  if (length(mean_idx) == 0 && length(sd_idx) == 0 && ncol(df) >= 3) {
+    names(df)[2:3] <- c("Mean", "SD")
+  } else {
+    if (length(mean_idx) > 0) names(df)[mean_idx[1]] <- "Mean"
+    if (length(sd_idx)   > 0) names(df)[sd_idx[1]]   <- "SD"
+  }
+
+  # If Mean still missing, split a “4.18±0.71” column
+  if (!"Mean" %in% names(df)) {
+    second_col <- names(df)[2]
+    df <- tidyr::separate_wider_regex(
+      df, !!second_col,
+      patterns = c("(?<Mean>-?\\d+\\.?\\d*)", "\\s*(±|\\+\\-)\\s*", "(?<SD>\\d+\\.?\\d*)"),
+      too_few = "align_start"
+    )
+  }
+
+  df |>
+    dplyr::mutate(
+      # always coerce to character first to satisfy parse_number()
+      Mean    = readr::parse_number(as.character(Mean)),
+      SD      = readr::parse_number(as.character(SD)),
+      Surface = surface_label
+    ) |>
+    dplyr::select(Treatment, Mean, SD, Surface)
+}
+
+
+```
+
+```{r}
+ib  <- read_surface(ib_file,  "IB")
+pvc <- read_surface(pvc_file, "PVC")
+ib_pvc_long <- dplyr::bind_rows(ib, pvc)
+
+```
+
+
+```{r}
+# ---- heatmap-end-to-end ----
+# Packages
+library(readr); library(dplyr); library(stringr); library(tidyr)
+library(forcats); library(ggplot2); library(grid)
+
+# Paths (use the ones you confirmed)
+ib_file  <- "../Heatmap_Project/data/IB_table.csv"
+pvc_file <- "../Heatmap_Project/data/PVC_table.csv"
+stopifnot(file.exists(ib_file), file.exists(pvc_file))
+
+# Reader that handles different headers OR a single "mean±sd" column
+read_surface <- function(path, surface_label) {
+  df <- read_csv(path, show_col_types = FALSE)
+
+  # Try to standardize headers -> Treatment / Mean / SD
+  nm <- tolower(names(df))
+  if (!"treatment" %in% nm) names(df)[1] <- "Treatment" else
+    names(df)[match("treatment", nm)] <- "Treatment"
+
+  mean_idx <- which(str_detect(nm, "mean|average"))
+  sd_idx   <- which(str_detect(nm, "^sd$|std|stdev|st\\.dev|st\\s*dev"))
+
+  if (length(mean_idx) == 0 && length(sd_idx) == 0 && ncol(df) >= 3) {
+    names(df)[2:3] <- c("Mean","SD")
+  } else {
+    if (length(mean_idx) > 0) names(df)[mean_idx[1]] <- "Mean"
+    if (length(sd_idx)   > 0) names(df)[sd_idx[1]]   <- "SD"
+  }
+
+  # If Mean still missing, split a single "4.18±0.71" column
+  if (!"Mean" %in% names(df)) {
+    second_col <- names(df)[2]
+    df <- separate_wider_regex(
+      df, !!second_col,
+      patterns = c("(?<Mean>-?\\d+\\.?\\d*)", "\\s*(±|\\+/-|\\+-)\\s*", "(?<SD>\\d+\\.?\\d*)"),
+      too_few  = "align_start"
+    )
+  }
+
+  df |>
+    mutate(
+      Mean    = readr::parse_number(as.character(Mean)),
+      SD      = readr::parse_number(as.character(SD)),
+      Surface = surface_label
+    ) |>
+    select(Treatment, Mean, SD, Surface) |>
+    filter(!is.na(Mean))
+}
+
+# Read both tables
+ib  <- read_surface(ib_file,  "IB")
+pvc <- read_surface(pvc_file, "PVC")
+
+# Combine
+ib_pvc_long <- bind_rows(ib, pvc)
+
+# Diagnostics (shows in the document)
+cat("Rows:", nrow(ib_pvc_long), "\n"); print(head(ib_pvc_long, 3))
+
+# Filter out control and set order (detergent first, then foam)
+df_plot <- ib_pvc_long |>
+  filter(Treatment != "Without Treatment") |>
+  mutate(
+    Treatment = fct_relevel(
+      Treatment,
+      "Det+Chlorine","Det+PAA","Det+Water",
+      "Foam+Chlorine","Foam+PAA","Foam+Water"
+    ),
+    Surface = factor(Surface, levels = c("IB","PVC"))
+  )
+
+stopifnot(nrow(df_plot) > 0)  # fail early if filtering removed everything
+
+# Build plot (note: last line prints it)
+ggplot(df_plot, aes(x = Surface, y = Treatment, fill = Mean)) +
+  geom_tile(color = "white", linewidth = 0.6) +
+  geom_text(aes(label = sprintf("%.2f \u00B1 %.2f", Mean, SD)),
+            size = 4.2, fontface = "bold") +
+  scale_fill_gradientn(
+    colors = c("#fefbd1","#d9f0a3","#a1d76a","#66bd63","#1a9850"),
+    limits = c(0, 4.5),
+    breaks = c(0, 1, 2, 3, 4, 4.5),
+    labels = c("0","1","2","3","4","4.5"),
+    name   = "Mean log reduction\n(log10 CFU/coupon)"
+  ) +
+  guides(fill = guide_colorbar(
+    title.position = "top", title.hjust = 0.5,
+    barheight = unit(6, "cm"), barwidth = unit(0.5, "cm")
+  )) +
+  labs(
+    title = "Inactivation on Soiled Surfaces",
+    subtitle = "Mean (±SD) log reductions by treatment on IB and PVC",
+    x = "Food Contact Surface", y = "Treatment"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(panel.grid = element_blank(),
+        legend.position = "right",
+        legend.title = element_text(face = "bold"))
+
+```
+```{r}
+library(scales)   # for scales::squish
+
+# Desired order
+t_order <- c("Det+Chlorine","Det+PAA","Det+Water",
+             "Foam+Chlorine","Foam+PAA","Foam+Water")
+
+df_plot <- df_plot |>
+  mutate(
+    Treatment = factor(Treatment, levels = t_order),
+    Surface   = factor(Surface, levels = c("IB","PVC"))
+  )
+
+ggplot(df_plot, aes(x = Surface, y = Treatment, fill = Mean)) +
+  geom_tile(color = "white", linewidth = 0.6) +
+  geom_text(aes(label = sprintf("%.2f \u00B1 %.2f", Mean, SD)),
+            size = 4.2, fontface = "bold") +
+  # put Det+Chlorine at TOP and Foam+Water at BOTTOM
+  scale_y_discrete(limits = rev(t_order)) +
+  # start legend at 1.5
+  scale_fill_gradientn(
+    colors = c("#fefbd1","#d9f0a3","#a1d76a","#66bd63","#1a9850"),
+    limits = c(1.5, 4.5),
+    breaks = seq(1.5, 4.5, by = 0.5),
+    labels = seq(1.5, 4.5, by = 0.5),
+    name   = "Mean log reduction\n(log10 CFU/coupon)",
+    oob    = scales::squish    # clamp any values outside limits
+  ) +
+  guides(fill = guide_colorbar(
+    title.position = "top", title.hjust = 0.5,
+    barheight = unit(6, "cm"), barwidth = unit(0.5, "cm")
+  )) +
+  labs(
+    title = "Inactivation on Soiled Surfaces",
+    subtitle = "Mean (±SD) log reductions by treatment on IB and PVC",
+    x = "Food Contact Surface", y = "Treatment"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(panel.grid = element_blank(),
+        legend.position = "right",
+        legend.title = element_text(face = "bold"))
+
+```
+
+```{r}
+library(scales)
+
+t_order <- c("Det+Chlorine","Det+PAA","Det+Water",
+             "Foam+Chlorine","Foam+PAA","Foam+Water")
+
+df_plot <- df_plot |>
+  mutate(
+    Treatment = factor(Treatment, levels = t_order),
+    Surface   = factor(Surface, levels = c("IB","PVC"))
+  )
+
+ggplot(df_plot, aes(Surface, Treatment, fill = Mean)) +
+  geom_tile(color = "white", linewidth = 0.6) +
+  geom_text(aes(label = sprintf("%.2f \u00B1 %.2f", Mean, SD)),
+            size = 4.2, fontface = "bold") +
+  scale_y_discrete(limits = rev(t_order)) +
+  scale_fill_gradientn(
+    colors = c("#fefbd1","#d9f0a3","#a1d76a","#66bd63","#1a9850"),
+    limits = c(1.5, 4.5),
+    breaks = seq(1.5, 4.5, by = 0.5),
+    labels = seq(1.5, 4.5, by = 0.5),
+    name   = "Mean log reduction (log10 CFU/coupon)",
+    oob    = scales::squish
+  ) +
+  # --- make legend horizontal and smaller title ---
+  guides(fill = guide_colorbar(
+    direction     = "horizontal",
+    title.position= "top", title.hjust = 0.5,
+    barwidth      = unit(8, "cm"),
+    barheight     = unit(0.4, "cm")
+  )) +
+  theme_minimal(base_size = 14) +
+  theme(
+    panel.grid   = element_blank(),
+    legend.position = "bottom",
+    legend.title    = element_text(size = 11, face = "bold"),  # smaller (medium) title
+    legend.text     = element_text(size = 10)                  # optional: tick size
+  ) +
+  labs(
+    title    = "Inactivation on Soiled Surfaces",
+    subtitle = "Mean (±SD) log reductions by treatment on IB and PVC",
+    x = "Food Contact Surface", y = "Treatment"
+  )
+
+
+```
+
+```{r}
+# if you changed 'base_col', define it (or use "black")
+base_col <- "#121212"
+
+treat_order <- c("Det+Chlorine", "Det+PAA", "Det+Water",
+                 "Foam+Chlorine", "Foam+PAA", "Foam+Water")
+
+df2 <- ib_pvc_long |>
+  dplyr::filter(Treatment %in% order_vec) |>
+  dplyr::mutate(Treatment = factor(Treatment, levels = order_vec))
+
+p <- ggplot(df2, aes(x = Surface, y = Treatment, fill = Mean)) +
+  geom_tile(color = "white", linewidth = 1.1) +
+  geom_text(aes(label = sprintf("%.2f ± %.2f", Mean, SD)),
+            fontface = "bold", color = base_col, size = 4.5) +
+  scale_fill_gradientn(
+    colours = c("#fefbd1", "#d9f0a3", "#a6d96a", "#66bd63", "#1a9850"),
+    limits = c(1.5, 4.5), breaks = seq(1.5, 4.5, by = 0.5),
+    name = "Mean log reduction (log10 CFU/coupon)"
+  ) +
+  labs(
+    title = "Inactivation on Soiled Surfaces",
+    subtitle = "Mean (±SD) log reductions by treatment on IB and PVC",
+    x = "Food Contact Surface", y = "Treatment"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.title = element_text(size = 12, face = "bold", color = base_col),
+    legend.text  = element_text(size = 10, color = base_col),
+    axis.title.x = element_text(color = base_col, size = 16, face = "bold",
+                                margin = margin(t = 12)),
+    axis.title.y = element_text(color = base_col, size = 16, face = "bold",
+                                margin = margin(r = 12)),
+    axis.text.x  = element_text(color = base_col, size = 12),
+    axis.text.y  = element_text(color = base_col, size = 12),
+    plot.title   = element_text(color = base_col, size = 22, face = "bold"),
+    plot.subtitle= element_text(color = base_col, size = 14)
+  ) +
+  guides(fill = guide_colorbar(
+    barwidth = unit(8, "cm"), barheight = unit(0.5, "cm"),
+    ticks = TRUE, label.position = "bottom", title.position = "top"
+  ))
+
+p   # <- IMPORTANT: print the plot (last line of chunk)
+
+```
+
+```{r}
+# 1) choose the order you want (top → bottom)
+treat_order <- c("Det+Chlorine", "Det+PAA", "Det+Water",
+                 "Foam+Chlorine", "Foam+PAA", "Foam+Water")
+
+# 2) rebuild the plotting data with that order
+df2 <- ib_pvc_long |>
+  dplyr::filter(Treatment %in% treat_order) |>
+  dplyr::mutate(Treatment = factor(Treatment, levels = treat_order))
+
+# 3) replot – put first level at the TOP by reversing on the y scale
+p <- ggplot(df2, aes(x = Surface, y = Treatment, fill = Mean)) +
+  geom_tile(color = "white", linewidth = 1.1) +
+  geom_text(aes(label = sprintf("%.2f ± %.2f", Mean, SD)),
+            fontface = "bold", color = "#121212", size = 4.5) +
+  scale_y_discrete(limits = rev(treat_order)) +   # <-- this line controls top-to-bottom order
+  scale_fill_gradientn(
+    colours = c("#fefbd1", "#d9f0a3", "#a6d96a", "#66bd63", "#1a9850"),
+    limits = c(1.5, 4.5), breaks = seq(1.5, 4.5, 0.5),
+    name = "Mean log reduction\n(log10 CFU/coupon)"
+  ) +
+  labs(title = "Inactivation on Soiled Surfaces",
+       subtitle = "Mean (±SD) log reductions by treatment on IB and PVC",
+       x = "Food Contact Surface", y = "Treatment") +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "bottom")
+
+p
+
+```
+
+```{r}
+library(dplyr)
+library(stringr)
+library(forcats)
+library(ggplot2)
+
+treat_order <- c("Det+Chlorine","Det+PAA","Det+Water",
+                 "Foam+Chlorine","Foam+PAA","Foam+Water")
+
+df2 <- ib_pvc_long %>%
+  filter(Treatment != "Without Treatment") %>%     # drop control
+  mutate(Treatment = str_squish(Treatment),        # remove stray spaces
+         Treatment = factor(Treatment,             # <-- reverse levels so top = Det+Chlorine
+                            levels = rev(treat_order)))
+
+# sanity check: the first level should be Foam+Water, so top row will be Det+Chlorine
+levels(df2$Treatment)
+
+df2 <- ib_pvc_long |>
+  dplyr::filter(Treatment %in% order_vec) |>
+  dplyr::mutate(Treatment = factor(Treatment, levels = order_vec))
+
+p <- ggplot(df2, aes(x = Surface, y = Treatment, fill = Mean)) +
+  geom_tile(color = "white", linewidth = 1.1) +
+  geom_text(aes(label = sprintf("%.2f ± %.2f", Mean, SD)),
+            fontface = "bold", color = base_col, size = 4.5) +
+  scale_fill_gradientn(
+    colours = c("#fefbd1", "#d9f0a3", "#a6d96a", "#66bd63", "#1a9850"),
+    limits = c(1.5, 4.5), breaks = seq(1.5, 4.5, by = 0.5),
+    name = "Mean log reduction (log CFU/coupon)"
+  ) +
+  labs(
+    title = "Inactivation on Soiled Surfaces",
+    subtitle = "Mean (±SD) log reductions by treatment on IB and PVC",
+    x = "Food Contact Surface", y = "Treatment"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.title = element_text(size = 12, face = "bold", color = base_col),
+    legend.text  = element_text(size = 10, color = base_col),
+    axis.title.x = element_text(color = base_col, size = 16, face = "bold",
+                                margin = margin(t = 12)),
+    axis.title.y = element_text(color = base_col, size = 16, face = "bold",
+                                margin = margin(r = 12)),
+    axis.text.x  = element_text(color = base_col, size = 12),
+    axis.text.y  = element_text(color = base_col, size = 12),
+    plot.title   = element_text(color = base_col, size = 22, face = "bold"),
+    plot.subtitle= element_text(color = base_col, size = 14)
+  ) +
+  guides(fill = guide_colorbar(
+    barwidth = unit(8, "cm"), barheight = unit(0.5, "cm"),
+    ticks = TRUE, label.position = "bottom", title.position = "top"
+  ))
+
+p   # <- IMPORTANT: print the plot (last line of chunk)
+
+```
+
+```{r}
+library(dplyr)
+library(stringr)
+library(forcats)
+library(ggplot2)
+
+treat_order <- c("Det+Chlorine","Det+PAA","Det+Water",
+                 "Foam+Chlorine","Foam+PAA","Foam+Water")
+
+df2 <- ib_pvc_long %>%
+  filter(Treatment != "Without Treatment") %>%     # drop control
+  mutate(Treatment = str_squish(Treatment),        # remove stray spaces
+         Treatment = factor(Treatment,             # <-- reverse levels so top = Det+Chlorine
+                            levels = rev(treat_order)))
+
+# sanity check: the first level should be Foam+Water, so top row will be Det+Chlorine
+levels(df2$Treatment)
+
+df2 <- ib_pvc_long |>
+  dplyr::filter(Treatment %in% order_vec) |>
+  dplyr::mutate(Treatment = factor(Treatment, levels = order_vec))
+
+p <- ggplot(df2, aes(x = Surface, y = Treatment, fill = Mean)) +
+  geom_tile(color = "white", linewidth = 1.1) +
+  geom_text(aes(label = sprintf("%.2f ± %.2f", Mean, SD)),
+            fontface = "bold", color = base_col, size = 4.5) +
+  scale_fill_gradientn(
+    colours = c("#fefbd1", "#d9f0a3", "#a6d96a", "#66bd63", "#1a9850"),
+    limits = c(1.5, 4.5), breaks = seq(1.5, 4.5, by = 0.5),
+    name = "Mean log reduction (log CFU/coupon)"
+  ) +
+  labs(title = "Inactivation on Soiled Surfaces",
+       subtitle = "Mean (±SD) log reductions by treatment on IB and PVC",
+       x = "Food Contact Surface", y = "Treatment") +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.title = element_text(colour = "black", face = "bold"),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text  = element_text(size = 10, face = "bold")
+  )
+
+p
+
+```
+```{r}
+library(dplyr)
+library(stringr)
+library(forcats)
+library(ggplot2)
+
+treat_order <- c("Det+Chlorine","Det+PAA","Det+Water",
+                 "Foam+Chlorine","Foam+PAA","Foam+Water")
+
+df2 <- ib_pvc_long %>%
+  filter(Treatment != "Without Treatment") %>%     # drop control
+  mutate(Treatment = str_squish(Treatment),        # remove stray spaces
+         Treatment = factor(Treatment,             # <-- reverse levels so top = Det+Chlorine
+                            levels = rev(treat_order)))
+
+# sanity check: the first level should be Foam+Water, so top row will be Det+Chlorine
+levels(df2$Treatment)
+
+p <- ggplot(df2, aes(Surface, Treatment, fill = Mean)) +
+  geom_tile(color = "white", linewidth = 1.1) +
+  geom_text(aes(label = sprintf("%.2f ± %.2f", Mean, SD)),
+            fontface = "bold", color = "#121212", size = 4.5) +
+  scale_fill_gradientn(
+    colours = c("#fefbd1", "#d9f0a3", "#a6d96a", "#66bd63", "#1a9850"),
+    limits = c(1.5, 4.5), breaks = seq(1.5, 4.5, 0.5),
+    name = "Mean log reduction (log CFU/coupon)"
+  ) +
+  
+  labs(title = "Inactivation on Soiled Surfaces",
+       subtitle = "Mean (±SD) log reductions by treatment on IB and PVC",
+       x = "Food Contact Surface", y = "Treatment") +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.title = element_text(colour = "black", face = "bold"),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text  = element_text(size = 10, face = "bold")
+  )
+
+p
+
+```
+```{r}
+library(grid)   # for unit()
+
+p <- ggplot(df2, aes(Surface, Treatment, fill = Mean)) +
+  geom_tile(color = "darkgreen", linewidth = 1.1) +
+  geom_text(aes(label = sprintf("%.2f ± %.2f", Mean, SD)),
+            fontface = "bold", color = "#121212", size = 4.5) +
+  # --- FIX THE LEGEND ---
+  scale_fill_gradientn(
+    colours = c("#fefbd1", "#d9f0a3", "#a6d96a", "#66bd63", "#1a9850"),
+    limits  = c(1.5, 4.5),
+    breaks  = seq(1.5, 4.5, 0.5),
+    name    = "Mean log reduction (log10 CFU/coupon)",
+    guide   = guide_colourbar(
+      title.position = "top", title.hjust = 0.5,
+      barwidth = unit(12, "cm"),   # make the bar long enough
+      barheight = unit(0.6, "cm"),
+      ticks.colour = "black",
+      label.theme = element_text(size = 11, face = "bold")
+    )
+  ) +
+  labs(title = "Inactivation of Salmonella on Soiled Surfaces",
+       subtitle = "Mean (±SD) log reductions by treatment on IB and PVC",
+       x = "Food Contact Surface", y = "Treatment") +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.title = element_text(colour = "black"),
+    legend.position = "bottom",
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text  = element_text(size = 11),
+    legend.box.margin = margin(t = 6, b = 6)
+  )
+
+p+
+
+  labs(title = expression(paste("Inactivation of ", italic(Salmonella), " on Soiled Surfaces"))) +
+  theme(plot.title = element_text(size = 16, face = "bold"))
+
+
+```
+```{r}
+p <- p +
+  labs(title = expression(paste("Inactivation of ", italic(Salmonella), " on Soiled Surfaces"))) +
+  theme(
+    plot.title  = element_text(size = 14, face = "bold"),
+    # ---- make axis titles bold ----
+    axis.title.x = element_text(face = "bold", colour = "black", size = 14,
+                                margin = margin(t = 8)),
+    axis.title.y = element_text(face = "bold", colour = "black", size = 14,
+                                margin = margin(r = 8)),
+    # (optional) make tick labels bold as well
+    axis.text.x  = element_text(face = "bold", colour = "black"),
+    axis.text.y  = element_text(face = "bold", colour = "black")
+  )
+p
+```
+```{r}
+p <- p +
+  labs(title = expression(bold("Inactivation of " * italic("Salmonella") *
+                              " on Soiled Surfaces"))) +
+  theme(plot.title = element_text(size = 20))
+p
+
+```
+```{r}
+
+```
+

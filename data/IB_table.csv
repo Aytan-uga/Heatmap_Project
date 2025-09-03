@@ -1,0 +1,8 @@
+Treatment,Average of Reduction (Log CFU/Coupon) Biological Replication,Stdv
+Det+Chlorine  ,4.18,0.71
+Det+PAA,4.21,1.20
+Det+Water ,2.85,0.47
+Foam+Chlorine ,3.83,0.45
+Foam+PAA,4.19,0.81
+Foam+Water ,2.70,0.39
+Without Treatment,0.00,0.38
